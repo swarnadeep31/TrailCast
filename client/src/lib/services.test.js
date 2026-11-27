@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 import { fuelGapChip, fuelGapSentence, kmAlong, kmLength, longGaps, offRoute, serviceName, SERVICE_KINDS } from './services.js';
 
 const gap = { fromM: 110000, toM: 475000, lengthM: 365000, afterName: 'Tandi', beforeName: 'the end' };

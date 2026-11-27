@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { formatKm, formatMetres, heightAxis, kmTicks, nameNear, niceStep, notablePeaks } from './elevation.js';
 
 test('niceStep picks round steps', () => {

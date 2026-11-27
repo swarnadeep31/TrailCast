@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { ERRORS, errorCodeFor, isOldVersion, serverWords } from './ErrorPage.jsx';
 
 describe('error pages', () => {

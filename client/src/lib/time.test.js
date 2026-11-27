@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { formatDuration, formatTime, parseTime } from './time.js';
 
 describe('formatTime', () => {

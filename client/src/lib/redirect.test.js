@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 import { safeNext } from './redirect.js';
 
 test('keeps paths on this site', () => {

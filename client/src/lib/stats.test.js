@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 import { cardSummary, climbText, daysText, distanceText, explain, highestText } from './stats.js';
 
 test('distance: exact for GPS routes, rounded to 5 km with ≈ for drawn ones', () => {

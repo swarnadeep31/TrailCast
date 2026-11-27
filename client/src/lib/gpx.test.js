@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { MAX_TRACK_POINTS, parseGpx } from './gpx.js';
 
 const gpx = (body) => `<?xml version="1.0" encoding="UTF-8"?>

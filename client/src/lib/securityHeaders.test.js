@@ -3,7 +3,7 @@
 // hash, and every outside site the pages load from is allowed.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const vercel = JSON.parse(read('../../vercel.json'));

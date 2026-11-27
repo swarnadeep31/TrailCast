@@ -12,6 +12,12 @@ function downsample(points, max) {
   return Array.from({ length: max }, (_, i) => points[Math.round(i * step)]);
 }
 
+// The elements with this name, whatever namespace the file uses (or none).
+function elementsNamed(doc, name) {
+  const found = [...doc.getElementsByTagNameNS('*', name)];
+  return found.length > 0 ? found : [...doc.getElementsByTagName(name)];
+}
+
 export function parseGpx(text, { maxPoints = MAX_TRACK_POINTS } = {}) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length > 0) {
@@ -19,8 +25,8 @@ export function parseGpx(text, { maxPoints = MAX_TRACK_POINTS } = {}) {
   }
 
   // Recorded tracks use <trkpt>; planned routes use <rtept>.
-  let nodes = [...doc.getElementsByTagNameNS('*', 'trkpt')];
-  if (nodes.length === 0) nodes = [...doc.getElementsByTagNameNS('*', 'rtept')];
+  let nodes = elementsNamed(doc, 'trkpt');
+  if (nodes.length === 0) nodes = elementsNamed(doc, 'rtept');
 
   const points = [];
   for (const node of nodes) {

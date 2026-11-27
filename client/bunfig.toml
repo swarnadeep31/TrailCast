@@ -1,0 +1,4 @@
+[test]
+# Only the website's own tests, with a browser-like page.
+root = "./src"
+preload = ["./test-setup.js"]

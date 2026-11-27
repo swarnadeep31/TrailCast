@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { parseGpx } from './gpx.js';
 import { fileNameFor, googleMapsUrl, toGpx, toKml, youtubeUrlAt } from './exports.js';
 

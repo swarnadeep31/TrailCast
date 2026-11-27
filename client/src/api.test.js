@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { api } from './api.js';
 import { errorCodeFor, serverWords } from './pages/ErrorPage.jsx';
 
 // What a failed call throws decides which error page shows (see ErrorPage.jsx).
 describe('a failed API call', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
 
   const answer = (status, body, type = 'application/json') =>
-    vi.stubGlobal('fetch', async () => new Response(body, { status, headers: { 'Content-Type': type } }));
+    globalThis.fetch = async () => new Response(body, { status, headers: { 'Content-Type': type } });
   const failure = (call) => call.then(() => expect.fail('it should have failed'), (err) => err);
 
   test("the hosting's own page instead of the server's words (a sleeping server): status kept, plain words", async () => {
@@ -27,9 +30,9 @@ describe('a failed API call', () => {
   });
 
   test('no answer at all: status 0, the page for no connection', async () => {
-    vi.stubGlobal('fetch', async () => {
+    globalThis.fetch = async () => {
       throw new TypeError('Failed to fetch');
-    });
+    };
     const err = await failure(api.getTrail('abc'));
     expect(err.status).toBe(0);
     expect(err.message).toMatch(/Couldn't reach TrailCast|offline/);
