@@ -233,6 +233,7 @@ Good to know about the free plans:
 | --- | --- |
 | `bun run dev` | Starts the API and the website, reloading when you change code |
 | `bun run test` | Runs the server and client tests |
+| `bun run typecheck` | Checks the TypeScript of the server and the client (strict) |
 | `bun run build` | Builds the website for production into `client/dist/` |
 | `bun run --cwd server try-ai <youtube-link or video file>` | Asks Gemini about one video and prints the places and the cost |
 | `bun run --cwd server backfill-route-extras` | Once, after updating: works out heights, services and stats for trails saved before the route tools |
@@ -252,18 +253,19 @@ client/                  React website (Vite, Tailwind CSS, Leaflet)
     hooks/               useYouTubePlayer: puts a YouTube player on the page and reports its time,
                          with a clock the map reads 60 times a second, and seeks (also while scrubbing);
                          useRouteServices: loads the services along a route; useReducedMotion
-    lib/                 Plain functions, each with a .test.js next to it:
-      gpx.js               read GPX files in the browser (route, times and heights)
-      track.js             where the rider is at a given video time, the part already covered, distances
+    lib/                 Plain functions, each with a .test.ts next to it:
+      gpx.ts               read GPX files in the browser (route, times and heights)
+      track.ts             where the rider is at a given video time, the part already covered, distances
                            along the route, and which video moment a point on the route belongs to
-      exports.js           GPX/KML files and Google Maps / YouTube links
-      elevation.js         axes for the elevation chart, the passes on the way, naming a spot after a key point
-      stats.js             the words on the trip stats chips, and how each number was worked out
-      services.js          how fuel stops and other services look, and the words about fuel gaps
-      time.js              12:30 <-> 750 seconds
-      theme.js             day/night mode: follows the device until the visitor clicks the sun or moon
-    api.js               All calls to the server
-    auth.jsx             Knows who is logged in, for every page (useAuth)
+      exports.ts           GPX/KML files and Google Maps / YouTube links
+      elevation.ts         axes for the elevation chart, the passes on the way, naming a spot after a key point
+      stats.ts             the words on the trip stats chips, and how each number was worked out
+      services.ts          how fuel stops and other services look, and the words about fuel gaps
+      time.ts              12:30 <-> 750 seconds
+      theme.ts             day/night mode: follows the device until the visitor clicks the sun or moon
+    api.ts               All calls to the server
+    types.ts             What the API sends and takes (trails, key points, AI jobs...)
+    auth.tsx             Knows who is logged in, for every page (useAuth)
 server/                  Express API + MongoDB (Mongoose)
   src/
     models/              What trails, users, feedback, background jobs and services along a route look like in the
@@ -276,21 +278,21 @@ server/                  Express API + MongoDB (Mongoose)
     aiRoute/             The AI route builder: the job's stages, cleaning Gemini's answers, finding the places
                          on the map, working out the cost
     routeExtras/         The route tools: the background job (route-enrich) that works out heights, services
-                         along the route and trip stats once per version of a route; profile.js turns heights
-                         into the elevation chart's profile, highest point and climb; stats.js works out the
-                         trip stats (distance, riding days, highest point, climb); services.js splits the route
+                         along the route and trip stats once per version of a route; profile.ts turns heights
+                         into the elevation chart's profile, highest point and climb; stats.ts works out the
+                         trip stats (distance, riding days, highest point, climb); services.ts splits the route
                          for Overpass, places what it finds along the route and works out the fuel gaps
-    jobs/worker.js       Runs background jobs in two lines: AI analyses (AI_WORKERS at once, 3 by default) and
+    jobs/worker.ts       Runs background jobs in two lines: AI analyses (AI_WORKERS at once, 3 by default) and
                          route work (one at a time). Users take turns, only one uploaded file is worked on at
                          a time, a job continues where it stopped after a restart, and a paid Gemini answer is
                          never asked for twice
     prompts/             What Gemini is asked (versioned, so a changed prompt doesn't reuse old answers)
     routes/              Which URL goes to which controller
-    middleware/          auth.js: login sessions; errorHandler.js: clear JSON error messages
+    middleware/          auth.ts: login sessions; errorHandler.ts: clear JSON error messages
     utils/               YouTube link parsing, distances on the map, times like 1:02:05, small helpers
-    config.js            The AI settings from server/.env
-  scripts/try-ai-route.js  Try Gemini on one video from the command line
-  scripts/backfill-route-extras.js  Queue the route tools' work for trails saved before them
+    config.ts            The AI settings from server/.env
+  scripts/try-ai-route.ts  Try Gemini on one video from the command line
+  scripts/backfill-route-extras.ts  Queue the route tools' work for trails saved before them
   test/                  API tests against a real (in-memory) MongoDB, with fake Gemini, maps and routing
 samples/                 A sample GPX file to try
 ```

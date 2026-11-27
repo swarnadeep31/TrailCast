@@ -7,13 +7,19 @@
     "dev": "bun --bun vite",
     "build": "bun --bun vite build",
     "preview": "bun --bun vite preview",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^21.0.4",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/bun": "^1.4.5",
+    "@types/leaflet": "^1.9.23",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
     "vite": "^8.3.4"
   },
   "dependencies": {
