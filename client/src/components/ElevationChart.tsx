@@ -1,0 +1,251 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { formatKm, formatMetres, heightAxis, kmTicks } from '../lib/elevation.ts';
+import { formatTime } from '../lib/time.ts';
+import { distanceAtTime, hiddenRangeAt, locationAtDistance, videoTimeAtDistance, waitsDuring, type MeasuredRoute, type SeekTo, type VideoMoment } from '../lib/track.ts';
+import type { KeyboardEvent, PointerEvent } from 'react';
+import type { VideoClock } from '../hooks/useYouTubePlayer.ts';
+import type { ElevationProfile, LatLng } from '../types.ts';
+
+const HEIGHT = 136;
+const MARGIN = { top: 24, right: 14, bottom: 22, left: 44 };
+
+// Index of the sample nearest `alongM` (d is sorted).
+function nearestSample(d: number[], alongM: number): number {
+  let lo = 0;
+  let hi = d.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (d[mid] <= alongM) lo = mid;
+    else hi = mid;
+  }
+  return alongM - d[lo] <= d[hi] - alongM ? lo : hi;
+}
+
+// The height of the route under the map, with a blue line at the current
+// moment of the video. Hover (or touch) to see a spot's distance, height and
+// video moment, click to watch from there. With the chart focused, the arrow
+// keys step 1 km and Enter jumps.
+// profile: { d, e, summary } (see server/src/routeExtras/profile.ts).
+// route: { track, cum, trackTimes, videoStartsAt, hiddenRanges }.
+// highestName: the place to name the highest point after; overnights: [{ alongM, label }].
+export default function ElevationChart({
+  profile,
+  route,
+  clock,
+  approximate,
+  highestName,
+  overnights = [],
+  getDuration,
+  onSeek,
+  onHover,
+}: {
+  profile: ElevationProfile;
+  route: MeasuredRoute;
+  clock?: VideoClock | null;
+  approximate: boolean;
+  highestName?: string | null;
+  overnights?: { alongM: number; label: string }[];
+  getDuration?: () => number;
+  onSeek?: SeekTo;
+  onHover?: (location: LatLng | null) => void;
+}) {
+  const { d, e, summary } = profile;
+  const total = d.at(-1)!;
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const cursorRef = useRef<SVGLineElement>(null);
+  const [width, setWidth] = useState(0);
+  const [hover, setHover] = useState<number | null>(null); // index into d/e
+  const onHoverRef = useRef(onHover);
+  onHoverRef.current = onHover;
+
+  const trackTimes = route.trackTimes ?? [];
+  const playable = trackTimes.length > 0 && trackTimes.length === route.track.length;
+  const axis = useMemo(() => heightAxis([...e, summary?.highestM ?? -Infinity].filter(Number.isFinite)), [e, summary]);
+  const ticks = useMemo(() => kmTicks(total), [total]);
+
+  // Draw at the width the chart really has, so text stays crisp.
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)));
+    observer.observe(wrapRef.current!);
+    return () => observer.disconnect();
+  }, []);
+
+  const plotWidth = Math.max(width - MARGIN.left - MARGIN.right, 1);
+  const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
+  const x = (m: number) => MARGIN.left + (m / total) * plotWidth;
+  const y = (h: number) => MARGIN.top + (1 - (h - axis.min) / (axis.max - axis.min)) * plotHeight;
+
+  const line = useMemo(() => {
+    if (!width) return '';
+    return d.map((m, i) => `${i ? 'L' : 'M'}${x(m).toFixed(1)},${y(e[i]).toFixed(1)}`).join('');
+    // x and y only change with these.
+  }, [d, e, width, axis]);
+
+  // The current moment of the video: drawn straight onto the chart about 60
+  // times a second, outside React, like the marker on the map.
+  useEffect(() => {
+    if (!playable || !width || !clock) return undefined;
+    let frame = 0;
+    let last: number | null = null;
+    const draw = () => {
+      const t = clock.now();
+      if (t !== last) {
+        last = t;
+        const cursor = cursorRef.current;
+        const recordingTime = t + (route.videoStartsAt ?? 0);
+        // On a drawn route the rider waits in view through a drone shot, as on the map.
+        const hidden = hiddenRangeAt(route.hiddenRanges, t);
+        const outside =
+          recordingTime < trackTimes[0] || recordingTime > trackTimes.at(-1)! || (hidden && !(approximate && waitsDuring(hidden)));
+        if (outside) cursor?.setAttribute('visibility', 'hidden');
+        else {
+          const px = x(distanceAtTime(route.cum, trackTimes, recordingTime)!).toFixed(1);
+          cursor?.setAttribute('x1', px);
+          cursor?.setAttribute('x2', px);
+          cursor?.setAttribute('visibility', 'visible');
+        }
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [playable, width, clock, route, total, axis, approximate]);
+
+  // The spot under the pointer also shows on the map.
+  useEffect(() => {
+    onHoverRef.current?.(hover === null ? null : locationAtDistance(route.track, route.cum, d[hover]));
+  }, [hover, route, d]);
+  useEffect(() => () => onHoverRef.current?.(null), []);
+
+  const momentAt = (i: number): VideoMoment | null => (playable ? videoTimeAtDistance(route, d[i], { duration: getDuration?.() ?? 0 }) : null);
+  const hoverMoment = hover === null ? null : momentAt(hover);
+
+  function sampleAtPointer(event: PointerEvent) {
+    const rect = wrapRef.current!.getBoundingClientRect();
+    const m = ((event.clientX - rect.left - MARGIN.left) / plotWidth) * total;
+    return nearestSample(d, Math.min(Math.max(m, 0), total));
+  }
+
+  function watch(i: number) {
+    const moment = momentAt(i);
+    if (moment) onSeek?.(moment.time, { final: true, play: true });
+  }
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const from = hover ?? (playable && clock ? nearestSample(d, distanceAtTime(route.cum, trackTimes, clock.now() + (route.videoStartsAt ?? 0))!) : 0);
+      const target = d[from] + (event.key === 'ArrowLeft' ? -1000 : 1000);
+      setHover(nearestSample(d, Math.min(Math.max(target, 0), total)));
+    } else if ((event.key === 'Enter' || event.key === ' ') && hover !== null) {
+      event.preventDefault();
+      watch(hover);
+    } else if (event.key === 'Escape') {
+      setHover(null);
+    }
+  }
+
+  const highestX = summary ? x(summary.highestAlongM) : null;
+  const highestLabel = summary && `Highest ${formatMetres(summary.highestM)} m${highestName ? ` · ${highestName}` : ''}`;
+  const describe =
+    `Elevation from ${formatMetres(Math.min(...e))} m to ${formatMetres(summary?.highestM ?? Math.max(...e))} m` +
+    (summary ? `; highest at km ${formatKm(summary.highestAlongM)}${highestName ? `, ${highestName}` : ''}.` : '.');
+  const momentText = (moment: VideoMoment | null) => {
+    if (!moment) return '';
+    if (moment.outside === 'before') return ' · The video starts later';
+    if (moment.outside === 'after') return ' · The video ends before here';
+    return ` · Click to watch · ${formatTime(moment.time)}`;
+  };
+  const hoverText = hover === null ? '' : `km ${formatKm(d[hover])} · ${formatMetres(e[hover])} m${momentText(hoverMoment)}`;
+
+  return (
+    <figure className="rounded-[3px] bg-paper px-3 pt-2 pb-1 ring-1 ring-ink/15">
+      <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 px-1">
+        <span className="margin-text text-ink">Cross-section · heights along the route</span>
+        {approximate && <span className="text-small text-ink-soft">Approximate: along the drawn route</span>}
+      </figcaption>
+      <div
+        ref={wrapRef}
+        tabIndex={0}
+        role="group"
+        aria-label={`${describe} Use the left and right arrow keys to move 1 km, and Enter to watch from there.`}
+        onKeyDown={onKeyDown}
+        onBlur={() => setHover(null)}
+        onPointerMove={(event) => setHover(sampleAtPointer(event))}
+        onPointerDown={(event) => setHover(sampleAtPointer(event))}
+        onPointerLeave={(event) => {
+          if (event.pointerType === 'mouse') setHover(null);
+        }}
+        onPointerUp={(event) => watch(sampleAtPointer(event))}
+        className={`relative touch-pan-y rounded-[3px] ${playable ? 'cursor-pointer' : ''}`}
+        style={{ height: HEIGHT }}
+      >
+        {width > 0 && (
+          <svg width={width} height={HEIGHT} aria-hidden="true" className="block overflow-visible">
+            {axis.ticks.map((h) => (
+              <g key={h}>
+                <line x1={MARGIN.left} x2={width - MARGIN.right} y1={y(h)} y2={y(h)} className="stroke-ink/10" strokeWidth="1" />
+                <text x={MARGIN.left - 6} y={y(h)} dy="0.32em" textAnchor="end" className="fill-ink-soft text-[12px] tabular-nums">
+                  {formatMetres(h)}
+                </text>
+              </g>
+            ))}
+            {ticks.map((km) => (
+              <text key={km} x={x(km * 1000)} y={HEIGHT - 6} textAnchor={km === 0 ? 'start' : 'middle'} className="fill-ink-soft text-[12px] tabular-nums">
+                {km === 0 ? '0 km' : km}
+              </text>
+            ))}
+
+            <path d={`${line}L${x(total).toFixed(1)},${y(axis.min)}L${x(0)},${y(axis.min)}Z`} className="elevation-wash" />
+            <path d={line} fill="none" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" className="elevation-line" />
+
+            {overnights.map((night) => (
+              <g key={night.alongM}>
+                <line x1={x(night.alongM)} x2={x(night.alongM)} y1={MARGIN.top} y2={HEIGHT - MARGIN.bottom} className="stroke-water/60" strokeWidth="1" strokeDasharray="3 3" />
+                <text x={x(night.alongM) + 4} y={HEIGHT - MARGIN.bottom - 5} className="fill-water text-[12px] font-medium">
+                  {night.label}
+                </text>
+              </g>
+            ))}
+
+            {summary && (
+              <g>
+                <circle cx={highestX!} cy={Math.max(y(summary.highestM), MARGIN.top)} r="4" strokeWidth="2" className="elevation-dot" />
+                <text
+                  x={highestX! + (highestX! > width / 2 ? -8 : 8)}
+                  y={Math.max(y(summary.highestM), MARGIN.top) - 8}
+                  textAnchor={highestX! > width / 2 ? 'end' : 'start'}
+                  className="fill-contour text-[12px] font-semibold"
+                >
+                  {highestLabel}
+                </text>
+              </g>
+            )}
+
+            {playable && (
+              <line ref={cursorRef} y1={MARGIN.top - 4} y2={HEIGHT - MARGIN.bottom} strokeWidth="2" className="elevation-cursor" visibility="hidden" />
+            )}
+
+            {hover !== null && (
+              <g pointerEvents="none">
+                <line x1={x(d[hover])} x2={x(d[hover])} y1={MARGIN.top - 4} y2={HEIGHT - MARGIN.bottom} className="stroke-ink/40" strokeWidth="1" />
+                <circle cx={x(d[hover])} cy={y(e[hover])} r="4" strokeWidth="2" className="elevation-dot" />
+              </g>
+            )}
+          </svg>
+        )}
+        {hover !== null && width > 0 && (
+          <p
+            className="pointer-events-none absolute top-0 z-10 rounded-[3px] bg-ink px-2.5 py-1 text-small font-medium whitespace-nowrap text-paper shadow-md"
+            style={x(d[hover]) > width / 2 ? { right: width - x(d[hover]) + 8 } : { left: x(d[hover]) + 8 }}
+          >
+            {hoverText}
+          </p>
+        )}
+        <p className="sr-only" aria-live="polite">
+          {hoverText}
+        </p>
+      </div>
+    </figure>
+  );
+}

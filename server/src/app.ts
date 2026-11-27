@@ -1,0 +1,80 @@
+import compression from 'compression';
+import cookieParser from 'cookie-parser';
+import express from 'express';
+import { loadUser } from './middleware/auth.ts';
+import { errorHandler, notFound } from './middleware/errorHandler.ts';
+import { applyRateLimits, rateLimitsOn } from './middleware/rateLimits.ts';
+import { aiConfig, aiRouteAvailable, routeConfig } from './config.ts';
+import { authRouter } from './routes/auth.ts';
+import { feedbackRouter } from './routes/feedback.ts';
+import { jobsRouter } from './routes/jobs.ts';
+import { placesRouter } from './routes/places.ts';
+import { trailsRouter } from './routes/trails.ts';
+import { googleClientId } from './services/google.ts';
+import { roadRoutingAvailable } from './services/routing.ts';
+
+// Sent with every answer. The API only answers with data (JSON), never pages,
+// so: nothing in an answer may run or load anything, no answer is shown inside
+// another site's frame, the browser never guesses a different content type,
+// and no address is passed on as the referrer.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
+
+const smallJson = express.json({ limit: '100kb' });
+const bigJson = express.json({ limit: '5mb' });
+const BIG_BODIES: [string, RegExp][] = [
+  ['POST', /^\/api\/trails\/?$/],
+  ['PATCH', /^\/api\/trails\/[^/]+\/?$/],
+  ['POST', /^\/api\/trails\/[^/]+\/ai-route\/(transcript|accept)\/?$/],
+];
+
+export function createApp() {
+  const app = express();
+  // Don't announce what the server runs on.
+  app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    res.set(SECURITY_HEADERS);
+    next();
+  });
+  // Answers are JSON, which gzip makes about five times smaller: a long route
+  // goes from ~760 KB to ~150 KB.
+  app.use(compression());
+  // Most requests are a few hundred bytes, so bodies are kept to 100 KB:
+  // anything bigger is refused before it's read (a stream of big logins
+  // would otherwise eat the free server's memory). Only these can be big:
+  // a ride's route (a long GPS recording), a pasted transcript, and the AI's
+  // places sent back after review.
+  app.use((req, res, next) => (BIG_BODIES.some(([method, path]) => req.method === method && path.test(req.path)) ? bigJson : smallJson)(req, res, next));
+  app.use(cookieParser());
+  app.use(loadUser);
+  if (rateLimitsOn()) applyRateLimits(app);
+
+  app.get('/api/health', (req, res) => res.json({ ok: true }));
+  // What this server can do, so the website can explain missing features.
+  app.get('/api/config', (req, res) =>
+    res.json({
+      roadRouting: roadRoutingAvailable(),
+      aiRoute: aiRouteAvailable(),
+      // The biggest video file the AI takes, so the page can say so before uploading.
+      aiMaxUploadMb: aiConfig().maxUploadMb,
+      routeServices: routeConfig().services,
+      fuelGapWarnKm: routeConfig().fuelGapWarnKm,
+      // For the "Continue with Google" button (empty: no button).
+      googleClientId: googleClientId(),
+    }),
+  );
+  app.use('/api/auth', authRouter);
+  app.use('/api/feedback', feedbackRouter);
+  app.use('/api/jobs', jobsRouter);
+  app.use('/api/places', placesRouter);
+  app.use('/api/trails', trailsRouter);
+  app.use('/api', notFound);
+
+  app.use(errorHandler);
+  return app;
+}

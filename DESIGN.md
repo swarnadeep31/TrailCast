@@ -1,6 +1,6 @@
 # TrailCast design system
 
-Every ride is a map sheet, printed the way the Survey of India prints a valley. The look is built in `client/src/index.css` (tokens and utilities) and `client/src/components/art/Sheet.jsx` (the drawings). See `PRODUCT.md` for who it's for, and `.impeccable/briefs/site.md` for the direction.
+Every ride is a map sheet, printed the way the Survey of India prints a valley. The look is built in `client/src/index.css` (tokens and utilities) and `client/src/components/art/Sheet.tsx` (the drawings). See `PRODUCT.md` for who it's for, and `.impeccable/briefs/site.md` for the direction.
 
 ## Inks
 
@@ -18,7 +18,7 @@ Each colour has one job, by day and by night (the `dark` class on `<html>`; the 
 | `water-tint` | #d7e6f4 | #1a3046 | Notices, selections, the "Night" tag |
 | `forest` | #2f6b3a | #8fd19e | Success (a GPS file read, a saved change) |
 
-Services along a route keep their own colours and letters (`lib/services.js`): fuel F, mechanics M, medical +, ATMs ₹.
+Services along a route keep their own colours and letters (`lib/services.ts`): fuel F, mechanics M, medical +, ATMs ₹.
 
 ## Type
 
@@ -44,7 +44,7 @@ Services along a route keep their own colours and letters (`lib/services.js`): f
 ## Drawings
 
 - `LogoMark`: a tiny sheet with contours, the road and the rider.
-- `SheetMap`: the home page's sketch of the Manali to Rohtang road (made-up terrain shaped like the valley, generated into `sheetMap.js`). Pins drop as the rider passes; `progress` steers it, `useAutoRide` rides it.
+- `SheetMap`: the home page's sketch of the Manali to Rohtang road (made-up terrain shaped like the valley, generated into `sheetMap.ts`). Pins drop as the rider passes; `progress` steers it, `useAutoRide` rides it.
 - The Leaflet map: tiles softened with a CSS filter by day and inverted at night; the route is red edged in ink; places are `.map-point` circles; the rider is the water-blue dot.
 
 ## Rules
