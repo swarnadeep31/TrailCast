@@ -1,0 +1,180 @@
+import { randomInt } from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import type { Request, Response } from 'express';
+import { endAllSessions, endSession, startSession } from '../middleware/auth.ts';
+import { normalizePhone, User } from '../models/User.ts';
+import { verifyGoogleCredential } from '../services/google.ts';
+import { httpError, type HttpError } from '../utils/httpError.ts';
+import { concurrencyLimit } from '../utils/limit.ts';
+
+const MIN_PASSWORD_LENGTH = 8;
+// bcrypt's cost: 10 (OWASP's minimum for bcrypt) takes about 60 ms; each step
+// up doubles it. At 12, a burst of 150 sign-ups saw 118 told the server was
+// busy. Passwords hashed at 12 before still check, as bcrypt keeps the cost.
+const HASH_ROUNDS = 10;
+
+// Hashing or checking a password takes a whole processor meanwhile, so only
+// two run at once. A burst waits its turn (200 waiting clear in a few seconds),
+// or past that is told the server is busy, and the rest of the site stays
+// quick meanwhile.
+const passwordWork = concurrencyLimit(2, { maxWaiting: 200 });
+const normalize = (text: unknown): string => String(text ?? '').trim().toLowerCase();
+
+// An error the sign-up and log-in pages can act on: code 'exists' (offer to
+// log in instead) or 'not_found' (offer to sign up instead).
+function authError(status: number, message: string, code: 'exists' | 'not_found'): HttpError {
+  const err = httpError(status, message);
+  err.code = code;
+  return err;
+}
+
+// The way in someone typed: { email } or { phone }, normalised.
+type Identifier = { email: string } | { phone: string };
+
+function identifierFrom(body: { phone?: unknown; email?: unknown } | undefined): Identifier {
+  if (body?.phone) {
+    const phone = normalizePhone(String(body.phone));
+    if (!phone) throw httpError(400, 'Enter a phone number with its country code, like +91 98765 43210.');
+    return { phone };
+  }
+  if (body?.email) return { email: normalize(body.email) };
+  throw httpError(400, 'Enter your email address or phone number.');
+}
+
+const describe = (identifier: Identifier): string => ('phone' in identifier ? 'phone number' : 'email');
+
+// A username for people who don't pick one, from their name or email: "swarnadeep_roy_4821".
+async function makeUsername(seed: string): Promise<string> {
+  const base =
+    normalize(seed)
+      .replace(/@.*/, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 20) || 'rider';
+  for (let i = 0; i < 20; i++) {
+    const candidate = (base.length < 3 ? `${base}_rider` : base) + (i === 0 ? '' : `_${randomInt(1000, 10000)}`);
+    if (!(await User.exists({ username: candidate }))) return candidate;
+  }
+  return `rider_${Date.now()}`;
+}
+
+// Signs up with a name, an email or phone number, and a password. If that
+// email or phone number already has an account, says so (code 'exists').
+export async function signup(req: Request, res: Response): Promise<void> {
+  const { name, username, password } = req.body ?? {};
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+    throw httpError(400, `Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+  if (password.length > 200) throw httpError(400, 'That password is too long.');
+  const displayName = String(name ?? username ?? '').trim();
+  if (!displayName) throw httpError(400, 'Enter your name.');
+
+  const identifier = identifierFrom(req.body);
+  if (await User.exists(identifier)) {
+    throw authError(409, `You already have an account with this ${describe(identifier)}. Please log in.`, 'exists');
+  }
+  if (username !== undefined && (await User.exists({ username: normalize(username) }))) throw httpError(409, 'That username is taken.');
+
+  const user = await User.create({
+    ...identifier,
+    name: displayName,
+    username: username ?? (await makeUsername(displayName)),
+    passwordHash: await passwordWork.run(() => bcrypt.hash(password, HASH_ROUNDS)),
+  });
+  await startSession(res, user);
+  res.status(201).json(user);
+}
+
+// Logs in with an email or phone number and the password. An email or
+// number without an account is told so (code 'not_found'), with a way to sign up.
+export async function login(req: Request, res: Response): Promise<void> {
+  const identifier = identifierFrom(req.body);
+  const user = await User.findOne(identifier).select('+passwordHash');
+  if (!user) throw authError(404, `There's no account with this ${describe(identifier)} yet. Sign up to create one.`, 'not_found');
+  if (!user.passwordHash) throw httpError(401, 'This account uses Google. Use "Continue with Google" to log in.');
+  const { password } = req.body ?? {};
+  // (No password is longer than sign-up allows, so a huge one isn't worth checking.)
+  const correct = typeof password === 'string' && password.length <= 200 && (await passwordWork.run(() => bcrypt.compare(password, user.passwordHash!)));
+  if (!correct) throw httpError(401, 'Wrong password. Try again.');
+  await startSession(res, user);
+  res.json(user);
+}
+
+// "Continue with Google", on the log-in and sign-up pages alike: an account
+// already linked to this Google account logs in; one with the same email is
+// linked to it and logs in (existing: true); otherwise a new account is made
+// (201). The answer says which, so the page can tell the person.
+//
+// Google has checked that the email belongs to the person signing in. An
+// account made earlier with that email and a password never proved it: anyone
+// can type someone else's email when signing up. So when Google is linked to
+// such an account, its password is removed and its other logins end, and the
+// account is the Google account owner's alone (passwordRemoved: true, so the
+// page can say to log in with Google from now on).
+export async function google(req: Request, res: Response): Promise<void> {
+  const profile = await verifyGoogleCredential(req.body?.credential);
+  if (!profile) throw httpError(401, "Google sign-in didn't work. Please try again.");
+
+  let user = await User.findOne({ googleId: profile.googleId });
+  let passwordRemoved = false;
+  if (!user) {
+    user = await User.findOne({ email: profile.email }).select('+passwordHash');
+    if (user) {
+      if (!user.emailVerified) {
+        passwordRemoved = Boolean(user.passwordHash);
+        user.passwordHash = undefined;
+        user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+      }
+      user.googleId = profile.googleId;
+      user.emailVerified = true;
+      user.name ||= profile.name;
+      await user.save();
+    }
+  }
+  if (user) {
+    await startSession(res, user);
+    res.json({ user, existing: true, passwordRemoved });
+    return;
+  }
+
+  user = await User.create({
+    googleId: profile.googleId,
+    email: profile.email,
+    emailVerified: true,
+    name: profile.name || profile.email.split('@')[0],
+    username: await makeUsername(profile.name || profile.email),
+  });
+  await startSession(res, user);
+  res.status(201).json({ user, existing: false, passwordRemoved });
+}
+
+export async function logout(req: Request, res: Response): Promise<void> {
+  await endSession(req, res);
+  res.status(204).end();
+}
+
+// "Log out on all devices": for a lost phone, or a computer logged in somewhere else.
+export async function logoutEverywhere(req: Request, res: Response): Promise<void> {
+  await endAllSessions(req, res);
+  res.status(204).end();
+}
+
+export function me(req: Request, res: Response): void {
+  res.json({ user: req.user ?? null });
+}
+
+export async function saveOnboarding(req: Request, res: Response): Promise<void> {
+  const user = req.user!;
+  const { interests, referralSource, wishlist } = req.body ?? {};
+  if (!Array.isArray(interests) || interests.length === 0) {
+    throw httpError(400, 'Pick at least one thing you want to use TrailCast for.');
+  }
+  user.set({
+    interests: [...new Set(interests)],
+    referralSource: referralSource ?? '',
+    wishlist: wishlist ?? '',
+    onboardedAt: user.onboardedAt ?? new Date(),
+  });
+  await user.save();
+  res.json(user);
+}

@@ -1,5 +1,5 @@
 {
-  "about": "Shared cases for the route maths in server/src/utils/geo.js and client/src/lib/track.js. Routes run along the equator, where 0.01 degrees of longitude is 1111.949 m. Distances are checked to within 0.05 m, times to within 0.01 s.",
+  "about": "Shared cases for the route maths in server/src/utils/geo.ts and client/src/lib/track.ts. Routes run along the equator, where 0.01 degrees of longitude is 1111.949 m. Distances are checked to within 0.05 m, times to within 0.01 s.",
   "tracks": {
     "line": [[0, 0], [0, 0.01], [0, 0.02]],
     "stop": [[0, 0], [0, 0.01], [0, 0.01], [0, 0.02]],

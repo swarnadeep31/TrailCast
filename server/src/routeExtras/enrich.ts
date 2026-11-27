@@ -1,0 +1,227 @@
+// The route-enrich job: what a route needs beyond its shape, worked out once
+// per route version in the background. Stages run in order and each saves
+// before the next: heights for the elevation chart, services along the route
+// (fuel, mechanics, medical help, ATMs), then the trip stats. Viewers never
+// call outside services; they only read what this job saved.
+import { routeConfig } from '../config.ts';
+import { Job, type JobDoc } from '../models/Job.ts';
+import { RouteServices } from '../models/RouteServices.ts';
+import { Trail, type TrailDoc } from '../models/Trail.ts';
+import type { OverpassElement } from '../services/overpass.ts';
+import type { LatLng } from '../types.ts';
+import type { Types } from 'mongoose';
+import { heightsAvailable, lineHeights, MAX_ELEVATION_POINTS } from '../services/elevation.ts';
+import { runOverpassQuery } from '../services/overpass.ts';
+import { cumulativeDistances, locationAtDistance } from '../utils/geo.ts';
+import { buildProfile } from './profile.ts';
+import { buildQuery, capItems, chunkRoute, fuelGaps, placeItems, readElements, type ServiceItem } from './services.ts';
+import { computeStats } from './stats.ts';
+
+// The outside services, replaceable in tests.
+export interface EnrichServices {
+  heightsAvailable: () => boolean;
+  lineHeights: (locations: LatLng[]) => Promise<(number | null)[]>;
+  overpass: (query: string) => Promise<OverpassElement[]>;
+}
+export const defaultEnrichServices: EnrichServices = { heightsAvailable, lineHeights, overpass: runOverpassQuery };
+
+// When the services search fails, it's tried again after each of these waits
+// in turn (hours), then given up on: about four days in all, because the
+// public Overpass servers can be overloaded for a day or more.
+export const SERVICES_RETRY_HOURS = [1, 3, 6, 12, 24, 48];
+const HOUR_MS = 60 * 60 * 1000;
+
+// The route changed (or the trail was deleted) while the job ran: its work is out of date.
+class RouteChanged extends Error {}
+
+async function currentTrail(job: JobDoc): Promise<TrailDoc> {
+  const trail = await Trail.findById(job.trail);
+  if (!trail || trail.routeVersion !== job.routeVersion) throw new RouteChanged();
+  return trail;
+}
+
+// Queues the work for the trail's current route. Called after every change to
+// a route: waiting jobs for older versions are cancelled, and a route with a
+// job already (queued, running or done) doesn't get a second one.
+export async function queueRouteEnrich(trail: TrailDoc) {
+  await Job.updateMany(
+    { type: 'route-enrich', trail: trail._id, state: 'queued', routeVersion: { $ne: trail.routeVersion } },
+    { state: 'cancelled', lockedUntil: new Date(0) },
+  );
+  if (trail.track.length < 2) return null;
+  const startAfter = new Date(Date.now() + routeConfig().enrichDelaySec * 1000);
+  return Job.findOneAndUpdate(
+    { type: 'route-enrich', trail: trail._id, routeVersion: trail.routeVersion, state: { $nin: ['cancelled', 'failed'] } },
+    { $setOnInsert: { user: trail.owner, state: 'queued', stage: 'elevation', lockedUntil: startAfter } },
+    { upsert: true, returnDocument: 'after' },
+  );
+}
+
+// Saves something worked out for a route, unless the route changed meanwhile.
+async function saveForVersion(job: JobDoc, changes: Record<string, unknown>): Promise<void> {
+  const { matchedCount } = await Trail.updateOne({ _id: job.trail, routeVersion: job.routeVersion }, { $set: changes });
+  if (matchedCount === 0) throw new RouteChanged();
+}
+
+// Heights for routes that came without them: straight lines, GPX files without
+// heights (or with too many missing), or when road routing failed. The route
+// is sent as up to 2,000 evenly spaced points. Heights are a nice extra: if
+// they can't be had, the elevation chart is simply not shown.
+async function addHeights(job: JobDoc, services: EnrichServices): Promise<void> {
+  const trail = await currentTrail(job);
+  if (trail.elevationProfile?.routeVersion === trail.routeVersion) return;
+  if (!services.heightsAvailable()) return;
+  const cum = cumulativeDistances(trail.track);
+  const total = cum.at(-1) ?? 0;
+  if (!(total > 0)) return;
+  const count = Math.max(2, Math.min(MAX_ELEVATION_POINTS, trail.track.length));
+  const alongM = Array.from({ length: count }, (_, i) => (total * i) / (count - 1));
+  let heights: (number | null)[];
+  try {
+    heights = await services.lineHeights(alongM.map((d) => locationAtDistance(trail.track, cum, d)!));
+  } catch (err) {
+    console.warn(`No heights for trail ${trail._id}: ${(err as Error).message}`);
+    return;
+  }
+  const profile = buildProfile({ alongM, heights, source: 'dem' });
+  if (profile) await saveForVersion(job, { elevationProfile: { ...profile, routeVersion: job.routeVersion } });
+}
+
+// Queues another go at the services search for the job's route version,
+// starting at `at`. `chunks`: the pieces of the route already answered, so the
+// next go carries on from there instead of asking for them again.
+// The job a retry is queued for: its trail, owner and route version.
+interface RetryFor {
+  trail: Types.ObjectId;
+  user: Types.ObjectId;
+  routeVersion?: number | null;
+}
+
+function queueServicesRetry(job: RetryFor, at: Date, chunks: unknown[] | null | undefined = []) {
+  return Job.create({
+    type: 'route-enrich',
+    trail: job.trail,
+    user: job.user,
+    routeVersion: job.routeVersion,
+    stage: 'services',
+    lockedUntil: at,
+    ...(chunks?.length && { chunks }),
+  });
+}
+
+// Services searches that failed and have nothing queued to try them again:
+// ones that gave up under an older, shorter retry schedule, or whose retry
+// was lost. Each gets one queued now (if it has retries left). Run when the
+// server starts. Returns how many were queued.
+export async function requeueStuckServices(): Promise<number> {
+  const failed = await RouteServices.find({ status: 'failed', attempts: { $lte: SERVICES_RETRY_HOURS.length } })
+    .select('trail routeVersion retryAt')
+    .lean();
+  let queued = 0;
+  for (const found of failed) {
+    // Its retry is still to come, and queued.
+    if (found.retryAt && found.retryAt > new Date()) continue;
+    const trail = await Trail.findById(found.trail).select('owner routeVersion').lean();
+    if (!trail || trail.routeVersion !== found.routeVersion) continue;
+    const waiting = await Job.exists({
+      type: 'route-enrich',
+      trail: trail._id,
+      routeVersion: trail.routeVersion,
+      state: { $in: ['queued', 'running'] },
+    });
+    if (waiting) continue;
+    await queueServicesRetry({ trail: trail._id, user: trail.owner, routeVersion: trail.routeVersion }, new Date());
+    queued++;
+  }
+  return queued;
+}
+
+// Saves what was found for this route version, clearing what no longer applies.
+async function saveServices(job: JobDoc, fields: Record<string, unknown>): Promise<void> {
+  const clear = Object.fromEntries(['reason', 'error', 'retryAt'].filter((key) => fields[key] === undefined).map((key) => [key, 1]));
+  const set = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+  await RouteServices.updateOne(
+    { trail: job.trail, routeVersion: job.routeVersion },
+    { $set: { computedAt: new Date(), ...set }, ...(Object.keys(clear).length && { $unset: clear }) },
+    { upsert: true },
+  );
+}
+
+// Fuel stations, mechanics, medical help and ATMs near the route, from
+// OpenStreetMap. The route is sent in pieces of about 200 km, one Overpass
+// query each, one at a time; each answer is saved in the job before the next,
+// so a restart doesn't ask again. If Overpass fails, it's tried again later
+// (SERVICES_RETRY_HOURS), carrying on from the pieces already answered, and
+// the rest of the page works as normal.
+async function findServices(job: JobDoc, services: EnrichServices): Promise<void> {
+  const trail = await currentTrail(job);
+  const config = routeConfig();
+  if (!config.services) return;
+  // Distances to a straight line drawn between places mean nothing.
+  if (trail.routeSource === 'keypoints' && trail.routeStyle === 'straight') {
+    await saveServices(job, { status: 'unavailable', reason: 'straight', items: [], fuelGaps: [] });
+    return;
+  }
+
+  const chunks = chunkRoute(trail.track, { chunkKm: config.chunkKm });
+  job.chunks ??= [];
+  // Each piece's places, as answered.
+  const answered = job.chunks as ServiceItem[][];
+  job.progress = { done: answered.length, total: chunks.length };
+  try {
+    for (let i = answered.length; i < chunks.length; i++) {
+      const elements = await services.overpass(buildQuery(chunks[i]));
+      await currentTrail(job); // don't keep asking for a route that has changed
+      answered.push(readElements(elements));
+      job.progress = { done: i + 1, total: chunks.length };
+      job.markModified('chunks');
+      await job.save();
+    }
+  } catch (err) {
+    if (err instanceof RouteChanged) throw err;
+    const previous = await RouteServices.findOne({ trail: job.trail, routeVersion: job.routeVersion });
+    const attempts = (previous?.attempts ?? 0) + 1;
+    const waitHours = SERVICES_RETRY_HOURS[attempts - 1];
+    const retryAt = waitHours ? new Date(Date.now() + waitHours * HOUR_MS) : null;
+    await saveServices(job, { status: 'failed', error: (err as Error).message, retryAt, attempts });
+    if (retryAt) await queueServicesRetry(job, retryAt, job.chunks);
+    return;
+  }
+
+  const items = capItems(placeItems(answered.flat(), trail.track));
+  const routeLengthM = cumulativeDistances(trail.track).at(-1) ?? 0;
+  await saveServices(job, { status: 'ready', items, fuelGaps: fuelGaps(items, routeLengthM, trail.points) });
+}
+
+export async function runEnrichJob(job: JobDoc, services: EnrichServices = defaultEnrichServices): Promise<JobDoc> {
+  try {
+    await currentTrail(job);
+    if (job.stage === 'elevation') {
+      await addHeights(job, services);
+      job.stage = 'services';
+      await job.save();
+    }
+    if (job.stage === 'services') {
+      await findServices(job, services);
+      job.stage = 'stats';
+      await job.save();
+    }
+    if (job.stage === 'stats') {
+      // Now with the heights and services the earlier stages found.
+      const trail = await currentTrail(job);
+      const found = await RouteServices.findOne({ trail: job.trail, routeVersion: job.routeVersion, status: 'ready' });
+      const longestFuelGap = found?.fuelGaps[0]?.toObject();
+      await saveForVersion(job, { stats: computeStats(trail, { longestFuelGap }) });
+    }
+    job.state = 'done';
+    job.lockedUntil = new Date(0);
+    await job.save();
+  } catch (err) {
+    if (!(err instanceof RouteChanged)) throw err;
+    job.state = 'cancelled';
+    job.error = 'The route changed before this finished.';
+    job.lockedUntil = new Date(0);
+    await job.save();
+  }
+  return job;
+}
