@@ -7,16 +7,17 @@ services:
     runtime: node
     plan: free
     region: singapore # the nearest to India; pick the one closest to your MongoDB Atlas cluster
-    # Uses the exact versions in the root package-lock.json, server packages only.
-    buildCommand: npm ci --workspace server --omit=dev
-    startCommand: npm start --workspace server
+    # Uses the exact versions in the root bun.lock.
+    # Bun installs and runs it (Render's Node runtime has Bun).
+    buildCommand: bun install --frozen-lockfile
+    startCommand: bun run --cwd server start
     healthCheckPath: /api/health
     # Only redeploy when the server changes, not for website-only changes.
     buildFilter:
       paths:
         - server/**
         - package.json
-        - package-lock.json
+        - bun.lock
     envVars:
       - key: NODE_ENV
         value: production

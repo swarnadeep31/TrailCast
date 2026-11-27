@@ -110,16 +110,16 @@ TrailCast never stores or streams video itself. That would be by far the most ex
 
 ## Run it on your computer
 
-You need **Node.js 22.22 or newer** (`node --version` to check; Node 24 LTS is a good choice).
+You need **Bun 1.3 or newer** (`bun --version` to check; get it from https://bun.sh). Bun installs the packages, runs the server and the TypeScript, and runs the tests.
 
 ```sh
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 Open http://localhost:5173. The API runs on http://localhost:4000.
 
-**Database:** with no settings, the server starts a temporary MongoDB in memory. `npm install` downloads it (about
+**Database:** with no settings, the server starts a temporary MongoDB in memory. `bun install` downloads it (about
 100 MB), and everything you add is lost when you stop the server. To keep your data, copy `server/.env.example` to
 `server/.env` and set `MONGODB_URI` to one of these:
 
@@ -151,7 +151,7 @@ found in the background a few seconds after a route is saved. When the main Over
 backup one is asked; if both fail, TrailCast tries again 1, 3, 6, 12, 24 and 48 hours later (about four days),
 carrying on from the parts of the route already found, and the trail's owner can press "Try again now".
 `.env.example` has the settings (the Overpass servers, switching it off, the 150 km fuel warning). After updating an
-existing site, run `npm run backfill-route-extras -w server` once so trails saved before get them too.
+existing site, run `bun run --cwd server backfill-route-extras` once so trails saved before get them too.
 
 **AI route builder (optional):** get a Gemini API key at https://aistudio.google.com ("Get API key") and set
 `GEMINI_API_KEY` in `server/.env`. `.env.example` lists the other settings: the model, backup models, the daily limit
@@ -163,13 +163,13 @@ prints the places found, the parts to skip, the tokens used and the cost in doll
 full answer in `server/ai-results/`:
 
 ```sh
-npm run try-ai -w server -- https://www.youtube.com/watch?v=VIDEO_ID
-npm run try-ai -w server -- https://www.youtube.com/watch?v=VIDEO_ID --high       # read sign boards closely (~3x the cost)
-npm run try-ai -w server -- https://www.youtube.com/watch?v=VIDEO_ID --geocode    # also find the places on the map
-npm run try-ai -w server -- https://www.youtube.com/watch?v=VIDEO_ID --fps 0.5    # 1 frame every 2 s: fewer picture tokens
-npm run try-ai -w server -- ride.mp4 --no-audio                                   # a video file, sent without its sound
-npm run try-ai -w server -- ride.mp4 --sound-only                                 # only the sound of a video file: what's said
-npm run try-ai -w server -- --list-models                                         # which Gemini models your key can use
+bun run --cwd server try-ai https://www.youtube.com/watch?v=VIDEO_ID
+bun run --cwd server try-ai https://www.youtube.com/watch?v=VIDEO_ID --high       # read sign boards closely (~3x the cost)
+bun run --cwd server try-ai https://www.youtube.com/watch?v=VIDEO_ID --geocode    # also find the places on the map
+bun run --cwd server try-ai https://www.youtube.com/watch?v=VIDEO_ID --fps 0.5    # 1 frame every 2 s: fewer picture tokens
+bun run --cwd server try-ai ride.mp4 --no-audio                                   # a video file, sent without its sound
+bun run --cwd server try-ai ride.mp4 --sound-only                                 # only the sound of a video file: what's said
+bun run --cwd server try-ai --list-models                                         # which Gemini models your key can use
 ```
 
 The cost section lists the tokens for the picture (VIDEO) and the sound (AUDIO) separately, so you can see what each
@@ -198,7 +198,7 @@ like `/trails/...` open the app.
 `client/vercel.json` also sends the website's security headers. Its Content-Security-Policy lists the only outside
 sites the pages may load from (the YouTube player and thumbnails, OpenStreetMap tiles, Google sign-in); a page that
 starts using another one needs it added there. It also allows the small script in `client/index.html` by its
-SHA-256 hash, so changing that script means updating the hash (`npm test -w client` says when they differ).
+SHA-256 hash, so changing that script means updating the hash (`bun run --cwd client test` says when they differ).
 
 1. **MongoDB Atlas:** under Network Access, allow connections from anywhere (`0.0.0.0/0`). Render's free plan has
    no fixed address. Use a strong database password.
@@ -211,7 +211,7 @@ SHA-256 hash, so changing that script means updating the hash (`npm test -w clie
 4. **Google sign-in:** in the Google Cloud console, add the Vercel address (`https://your-project.vercel.app`, and
    your own domain later) to the OAuth client's Authorised JavaScript origins.
 5. **Existing trails:** to give trails saved earlier their heights, fuel stops and stats, run
-   `npm run backfill-route-extras -w server` once from your computer with `MONGODB_URI` set to the Atlas database.
+   `bun run --cwd server backfill-route-extras` once from your computer with `MONGODB_URI` set to the Atlas database.
 
 Good to know about the free plans:
 
@@ -231,11 +231,12 @@ Good to know about the free plans:
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Starts the API and the website, reloading when you change code |
-| `npm test` | Runs the server and client tests |
-| `npm run build` | Builds the website for production into `client/dist/` |
-| `npm run try-ai -w server -- <youtube-link or video file>` | Asks Gemini about one video and prints the places and the cost |
-| `npm run backfill-route-extras -w server` | Once, after updating: works out heights, services and stats for trails saved before the route tools |
+| `bun run dev` | Starts the API and the website, reloading when you change code |
+| `bun run test` | Runs the server and client tests |
+| `bun run typecheck` | Checks the TypeScript of the server and the client (strict) |
+| `bun run build` | Builds the website for production into `client/dist/` |
+| `bun run --cwd server try-ai <youtube-link or video file>` | Asks Gemini about one video and prints the places and the cost |
+| `bun run --cwd server backfill-route-extras` | Once, after updating: works out heights, services and stats for trails saved before the route tools |
 
 ## How the code is organised
 
@@ -252,18 +253,19 @@ client/                  React website (Vite, Tailwind CSS, Leaflet)
     hooks/               useYouTubePlayer: puts a YouTube player on the page and reports its time,
                          with a clock the map reads 60 times a second, and seeks (also while scrubbing);
                          useRouteServices: loads the services along a route; useReducedMotion
-    lib/                 Plain functions, each with a .test.js next to it:
-      gpx.js               read GPX files in the browser (route, times and heights)
-      track.js             where the rider is at a given video time, the part already covered, distances
+    lib/                 Plain functions, each with a .test.ts next to it:
+      gpx.ts               read GPX files in the browser (route, times and heights)
+      track.ts             where the rider is at a given video time, the part already covered, distances
                            along the route, and which video moment a point on the route belongs to
-      exports.js           GPX/KML files and Google Maps / YouTube links
-      elevation.js         axes for the elevation chart, the passes on the way, naming a spot after a key point
-      stats.js             the words on the trip stats chips, and how each number was worked out
-      services.js          how fuel stops and other services look, and the words about fuel gaps
-      time.js              12:30 <-> 750 seconds
-      theme.js             day/night mode: follows the device until the visitor clicks the sun or moon
-    api.js               All calls to the server
-    auth.jsx             Knows who is logged in, for every page (useAuth)
+      exports.ts           GPX/KML files and Google Maps / YouTube links
+      elevation.ts         axes for the elevation chart, the passes on the way, naming a spot after a key point
+      stats.ts             the words on the trip stats chips, and how each number was worked out
+      services.ts          how fuel stops and other services look, and the words about fuel gaps
+      time.ts              12:30 <-> 750 seconds
+      theme.ts             day/night mode: follows the device until the visitor clicks the sun or moon
+    api.ts               All calls to the server
+    types.ts             What the API sends and takes (trails, key points, AI jobs...)
+    auth.tsx             Knows who is logged in, for every page (useAuth)
 server/                  Express API + MongoDB (Mongoose)
   src/
     models/              What trails, users, feedback, background jobs and services along a route look like in the
@@ -276,21 +278,21 @@ server/                  Express API + MongoDB (Mongoose)
     aiRoute/             The AI route builder: the job's stages, cleaning Gemini's answers, finding the places
                          on the map, working out the cost
     routeExtras/         The route tools: the background job (route-enrich) that works out heights, services
-                         along the route and trip stats once per version of a route; profile.js turns heights
-                         into the elevation chart's profile, highest point and climb; stats.js works out the
-                         trip stats (distance, riding days, highest point, climb); services.js splits the route
+                         along the route and trip stats once per version of a route; profile.ts turns heights
+                         into the elevation chart's profile, highest point and climb; stats.ts works out the
+                         trip stats (distance, riding days, highest point, climb); services.ts splits the route
                          for Overpass, places what it finds along the route and works out the fuel gaps
-    jobs/worker.js       Runs background jobs in two lines: AI analyses (AI_WORKERS at once, 3 by default) and
+    jobs/worker.ts       Runs background jobs in two lines: AI analyses (AI_WORKERS at once, 3 by default) and
                          route work (one at a time). Users take turns, only one uploaded file is worked on at
                          a time, a job continues where it stopped after a restart, and a paid Gemini answer is
                          never asked for twice
     prompts/             What Gemini is asked (versioned, so a changed prompt doesn't reuse old answers)
     routes/              Which URL goes to which controller
-    middleware/          auth.js: login sessions; errorHandler.js: clear JSON error messages
+    middleware/          auth.ts: login sessions; errorHandler.ts: clear JSON error messages
     utils/               YouTube link parsing, distances on the map, times like 1:02:05, small helpers
-    config.js            The AI settings from server/.env
-  scripts/try-ai-route.js  Try Gemini on one video from the command line
-  scripts/backfill-route-extras.js  Queue the route tools' work for trails saved before them
+    config.ts            The AI settings from server/.env
+  scripts/try-ai-route.ts  Try Gemini on one video from the command line
+  scripts/backfill-route-extras.ts  Queue the route tools' work for trails saved before them
   test/                  API tests against a real (in-memory) MongoDB, with fake Gemini, maps and routing
 samples/                 A sample GPX file to try
 ```

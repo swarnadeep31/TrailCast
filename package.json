@@ -8,14 +8,13 @@
     "client"
   ],
   "scripts": {
-    "dev": "concurrently --names server,client --prefix-colors blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
-    "test": "npm test -w server && npm test -w client",
-    "build": "npm run build -w client"
+    "dev": "bun --filter './server' --filter './client' dev",
+    "test": "bun --filter './server' test && bun --filter './client' test",
+    "build": "bun --filter './client' build",
+    "typecheck": "bun --filter './server' typecheck && bun --filter './client' typecheck"
   },
   "engines": {
-    "node": ">=22.22.0"
+    "bun": ">=1.3.0"
   },
-  "devDependencies": {
-    "concurrently": "^10.0.6"
-  }
+  "packageManager": "bun@1.4.5"
 }

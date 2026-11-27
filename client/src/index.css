@@ -6,7 +6,7 @@
 @import '@fontsource/khand/500.css';
 @import '@fontsource/khand/600.css';
 
-/* Night mode: the `dark` class on <html> (set by lib/theme.js). */
+/* Night mode: the `dark` class on <html> (set by lib/theme.ts). */
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* TrailCast prints every ride like a Survey of India map sheet: white sheet,
@@ -493,7 +493,7 @@
   }
 }
 
-/* The onboarding tour's little animated pictures (pages/TourPage.jsx). Each
+/* The onboarding tour's little animated pictures (pages/TourPage.tsx). Each
    one starts when its slide is shown. Without motion they show their last frame. */
 @keyframes tour-progress {
   from {
